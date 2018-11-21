@@ -23,6 +23,7 @@ import csv
 import os
 import modeling
 import optimization
+import re
 import tokenization
 import tensorflow as tf
 
@@ -122,6 +123,10 @@ tf.flags.DEFINE_string("master", None, "[Optional] TensorFlow master URL.")
 flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
+
+tf.flags.DEFINE_string(
+    "train_variables", None,
+    "[Optional] Only train variables which match the given regular expression.")
 
 
 class InputExample(object):
@@ -585,7 +590,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings):
+                     use_one_hot_embeddings, train_variables_re=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -623,6 +628,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     tf.logging.info("**** Trainable Variables ****")
+    tvars = [tvar for tvar in tvars if train_variables_re is None or
+             re.match(train_variables_re, tvar.name)]
     for var in tvars:
       init_string = ""
       if var.name in initialized_variable_names:
@@ -634,7 +641,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     if mode == tf.estimator.ModeKeys.TRAIN:
 
       train_op = optimization.create_optimizer(
-          total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu)
+          total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu,
+          tvars=tvars)
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -807,7 +815,8 @@ def main(_):
       num_train_steps=num_train_steps,
       num_warmup_steps=num_warmup_steps,
       use_tpu=FLAGS.use_tpu,
-      use_one_hot_embeddings=FLAGS.use_tpu)
+      use_one_hot_embeddings=FLAGS.use_tpu,
+      train_variables_re=FLAGS.train_variables)
 
   # If TPU is not available, this will fall back to normal Estimator on CPU
   # or GPU.
