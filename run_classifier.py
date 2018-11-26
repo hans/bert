@@ -87,6 +87,10 @@ flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
 flags.DEFINE_float("num_train_epochs", 3.0,
                    "Total number of training epochs to perform.")
 
+flags.DEFINE_integer("num_train_steps", 0,
+                     "Total number of training steps to perform."
+                     "(Overrides --num_train_epochs if given.)")
+
 flags.DEFINE_float(
     "warmup_proportion", 0.1,
     "Proportion of training to perform linear learning rate warmup for. "
@@ -1074,8 +1078,11 @@ def main(_):
   num_warmup_steps = None
   if FLAGS.do_train:
     train_examples = processor.get_train_examples(FLAGS.data_dir)
-    num_train_steps = int(
-        len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
+    if FLAGS.num_train_steps == 0:
+      num_train_steps = int(
+          len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
+    else:
+      num_train_steps = int(FLAGS.num_train_steps)
     num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
 
   model_fn = model_fn_builder(
