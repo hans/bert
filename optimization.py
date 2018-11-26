@@ -37,6 +37,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
       end_learning_rate=0.0,
       power=1.0,
       cycle=False)
+  tf.summary.scalar("learning_rate", learning_rate)
 
   # Implements linear warmup. I.e., if global_step < num_warmup_steps, the
   # learning rate will be `global_step/num_warmup_steps * init_lr`.
@@ -73,7 +74,8 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
   grads = tf.gradients(loss, tvars)
 
   # This is how the model was pre-trained.
-  (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  (grads, global_norm) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  tf.summary.scalar("grads/global_norm", global_norm)
 
   train_op = optimizer.apply_gradients(
       zip(grads, tvars), global_step=global_step)

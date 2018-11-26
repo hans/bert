@@ -871,6 +871,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     (total_loss, per_example_loss, logits, probabilities) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
+    tf.summary.scalar("loss", total_loss)
 
     tvars = [tvar for tvar in tf.trainable_variables()
              if (train_variables_re is None or
