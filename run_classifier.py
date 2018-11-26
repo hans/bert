@@ -128,6 +128,11 @@ tf.flags.DEFINE_string(
     "train_variables", None,
     "[Optional] Only train variables which match the given regular expression.")
 
+tf.flags.DEFINE_string(
+    "ignore_checkpoint_variables", None,
+    "[Optional] Only load checkpoint variables which don't match the given "
+    "regular expression.")
+
 
 class InputExample(object):
   """A single training/test example for simple sequence classification."""
@@ -590,7 +595,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings, train_variables_re=None):
+                     use_one_hot_embeddings,
+                     ignore_checkpoint_re=None, train_variables_re=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -611,12 +617,17 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
 
-    tvars = tf.trainable_variables()
+    tvars = [tvar for tvar in tf.trainable_variables()
+             if (train_variables_re is None or
+                 re.match(train_variables_re, tvar.name))]
     initialized_variable_names = {}
     scaffold_fn = None
     if init_checkpoint:
+      init_vars = [var for var in tvars
+                   if (ignore_checkpoint_re is None or
+                       not re.match(ignore_checkpoint_re, var.name))]
       (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+      ) = modeling.get_assignment_map_from_checkpoint(init_vars, init_checkpoint)
       if use_tpu:
 
         def tpu_scaffold():
@@ -628,8 +639,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     tf.logging.info("**** Trainable Variables ****")
-    tvars = [tvar for tvar in tvars if train_variables_re is None or
-             re.match(train_variables_re, tvar.name)]
     for var in tvars:
       init_string = ""
       if var.name in initialized_variable_names:
@@ -816,6 +825,7 @@ def main(_):
       num_warmup_steps=num_warmup_steps,
       use_tpu=FLAGS.use_tpu,
       use_one_hot_embeddings=FLAGS.use_tpu,
+      ignore_checkpoint_re=FLAGS.ignore_checkpoint_variables,
       train_variables_re=FLAGS.train_variables)
 
   # If TPU is not available, this will fall back to normal Estimator on CPU

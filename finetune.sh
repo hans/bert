@@ -3,9 +3,9 @@ MODEL="uncased_L-12_H-768_A-12" # BERT-Base, uncased
 BASEDIR=`pwd`
 MODELDIR="${BASEDIR}/${MODEL}"
 GLUE_BASEDIR=/om/data/public/glue/glue_data
-GLUETASK=COLA
-GLUEDIR="SST-2"
-OUTPUTDIR="${BASEDIR}/finetune.${MODEL}.${GLUEDIR}"
+GLUETASK=SNLI
+GLUEDIR=$GLUETASK
+OUTPUTDIR="${BASEDIR}/finetune.${MODEL}.${GLUETASK}"
 
 python run_classifier.py --task_name="${GLUETASK}" --do_train=true --do_eval=true \
     --data_dir="${GLUE_BASEDIR}/${GLUEDIR}" --vocab_file "${MODELDIR}/vocab.txt" \
