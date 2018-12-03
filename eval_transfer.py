@@ -31,6 +31,7 @@ def eval_transfer(model1, model2, **kwargs):
     "max_seq_length": 128,
     "ignore_checkpoint_variables": "^output_.+$",
     "train_variables": "^output_.+$",
+    "num_train_epochs": 1.0,
   }
   model_args.update(kwargs)
 
