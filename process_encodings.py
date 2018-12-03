@@ -2,6 +2,7 @@
 
 from argparse import ArgumentParser
 import json
+import os
 
 import numpy as np
 
@@ -31,3 +32,6 @@ assert set(encodings_out.keys()) == set(range(len(encodings_out)))
 encodings_out = sorted(encodings_out.items(), key=lambda a: a[0])
 encodings_out = [v for k, v in encodings_out]
 np.save(args.out_file, np.array(encodings_out))
+
+print("Removing original file " + args.encodings_file)
+os.remove(args.encodings_file)
