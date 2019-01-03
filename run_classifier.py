@@ -913,7 +913,6 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     (total_loss, per_example_loss, logits, probabilities) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
-    tf.summary.scalar("loss", total_loss)
 
     tvars = [tvar for tvar in tf.trainable_variables()
              if (train_variables_re is None or
@@ -1103,14 +1102,14 @@ def make_eval_input_fn(processor, tokenizer):
 
   eval_examples = processor.get_dev_examples(FLAGS.data_dir)
   num_actual_eval_examples = len(eval_examples)
-    if FLAGS.use_tpu:
-      # TPU requires a fixed batch size for all batches, therefore the number
-      # of examples must be a multiple of the batch size, or else examples
-      # will get dropped. So we pad with fake examples which are ignored
-      # later on. These do NOT count towards the metric (all tf.metrics
-      # support a per-instance weight, and these get a weight of 0.0).
-      while len(eval_examples) % FLAGS.eval_batch_size != 0:
-        eval_examples.append(PaddingInputExample())
+  if FLAGS.use_tpu:
+    # TPU requires a fixed batch size for all batches, therefore the number
+    # of examples must be a multiple of the batch size, or else examples
+    # will get dropped. So we pad with fake examples which are ignored
+    # later on. These do NOT count towards the metric (all tf.metrics
+    # support a per-instance weight, and these get a weight of 0.0).
+    while len(eval_examples) % FLAGS.eval_batch_size != 0:
+      eval_examples.append(PaddingInputExample())
 
   eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
   file_based_convert_examples_to_features(
@@ -1198,13 +1197,16 @@ def main(_):
       master=FLAGS.master,
       model_dir=FLAGS.output_dir,
       save_checkpoints_steps=FLAGS.save_checkpoints_steps,
+      keep_checkpoint_max=None,
       tpu_config=tf.contrib.tpu.TPUConfig(
           iterations_per_loop=FLAGS.iterations_per_loop,
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
-  train_input_fn, num_train_steps, num_warmup_steps = make_train_input_fn(processor)
-  eval_input_fn, num_eval_steps = make_eval_input_fn(processor)
+  train_input_fn, num_train_steps, num_warmup_steps = \
+      make_train_input_fn(processor, tokenizer)
+  eval_input_fn, num_eval_steps = \
+      make_eval_input_fn(processor, tokenizer)
 
   model_fn = model_fn_builder(
       bert_config=bert_config,
@@ -1229,10 +1231,18 @@ def main(_):
       predict_batch_size=FLAGS.predict_batch_size)
 
   if FLAGS.do_train:
-    estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+    if not FLAGS.do_eval:
+      estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+    else:
+      train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=num_train_steps)
+      eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn,
+          start_delay_secs=0, throttle_secs=0 # DEV
+          )
+      tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
+  # Run full evaluation.
   if FLAGS.do_eval:
-   result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
+    result = estimator.evaluate(input_fn=eval_input_fn, steps=num_eval_steps)
 
     output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
     with tf.gfile.GFile(output_eval_file, "w") as writer:
