@@ -914,34 +914,38 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
 
-    tvars = [tvar for tvar in tf.trainable_variables()
-             if (train_variables_re is None or
-                 re.match(train_variables_re, tvar.name))]
-    initialized_variable_names = {}
+    # Custom initialize from base model.
+    # We will load core model parameters but randomly initialize the output
+    # classifier weights.
     scaffold_fn = None
-    if init_checkpoint:
-      init_vars = [var for var in tvars
-                   if (ignore_checkpoint_re is None or
-                       not re.match(ignore_checkpoint_re, var.name))]
-      (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(init_vars, init_checkpoint)
-      if use_tpu:
+    if mode == tf.estimator.ModeKeys.TRAIN:
+      tvars = [tvar for tvar in tf.trainable_variables()
+              if (train_variables_re is None or
+                  re.match(train_variables_re, tvar.name))]
+      initialized_variable_names = {}
+      if init_checkpoint:
+        init_vars = [var for var in tvars
+                    if (ignore_checkpoint_re is None or
+                        not re.match(ignore_checkpoint_re, var.name))]
+        (assignment_map, initialized_variable_names
+        ) = modeling.get_assignment_map_from_checkpoint(init_vars, init_checkpoint)
+        if use_tpu:
 
-        def tpu_scaffold():
+          def tpu_scaffold():
+            tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+            return tf.train.Scaffold()
+
+          scaffold_fn = tpu_scaffold
+        else:
           tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-          return tf.train.Scaffold()
 
-        scaffold_fn = tpu_scaffold
-      else:
-        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-
-    tf.logging.info("**** Trainable Variables ****")
-    for var in tvars:
-      init_string = ""
-      if var.name in initialized_variable_names:
-        init_string = ", *INIT_FROM_CKPT*"
-      tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-                      init_string)
+      tf.logging.info("**** Trainable Variables ****")
+      for var in tvars:
+        init_string = ""
+        if var.name in initialized_variable_names:
+          init_string = ", *INIT_FROM_CKPT*"
+        tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+                        init_string)
 
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
