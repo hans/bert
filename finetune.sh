@@ -12,7 +12,7 @@ python run_classifier.py --task_name="${GLUETASK}" --do_train=true --do_eval=tru
     --data_dir="${GLUE_BASEDIR}/${GLUEDIR}" --vocab_file "${MODELDIR}/vocab.txt" \
     --bert_config_file "${MODELDIR}/bert_config.json" \
     --init_checkpoint "${MODELDIR}/bert_model.ckpt" \
-    --save_checkpoints_steps 500 \
+    --save_checkpoints_steps 50 \
     --max_seq_length 128 --train_batch_size 32 --learning_rate 2e-5 \
     --num_train_steps $MAX_TRAIN_STEPS \
     --output_dir "${OUTPUTDIR}"
