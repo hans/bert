@@ -8,7 +8,7 @@ MODELDIR="${BASEDIR}/${MODEL}"
 #CKPT_NAME="bert_model" # for some reason the pretrained models have this name that's different than what the fine-tuning scripts output
 CKPT_NAME="model"
 CKPT_SUFFIX="$2" # can be used to load checkpoint at a particular global step
-JSONL="encodings.${MODEL}.jsonl"
+JSONL="encodings.${MODEL}${CKPT_SUFFIX}.jsonl"
 NPY="encodings.${MODEL}${CKPT_SUFFIX}.npy"
 LAYER="-1"
 
