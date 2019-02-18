@@ -81,6 +81,8 @@ flags.DEFINE_integer(
 
 flags.DEFINE_bool("do_train", False, "Whether to run training.")
 
+flags.DEFINE_bool("do_eval", False, "Whether to run eval during training on the dev set.")
+
 flags.DEFINE_bool("do_predict", False, "Whether to run eval on the dev set.")
 
 flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
@@ -614,30 +616,31 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         segment_ids=segment_ids,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
-    tvars = tf.trainable_variables()
+    if mode == tf.estimator.ModeKeys.TRAIN:
+      tvars = tf.trainable_variables()
 
-    initialized_variable_names = {}
-    scaffold_fn = None
-    if init_checkpoint:
-      (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-      if use_tpu:
+      initialized_variable_names = {}
+      scaffold_fn = None
+      if init_checkpoint:
+        (assignment_map, initialized_variable_names
+        ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+        if use_tpu:
 
-        def tpu_scaffold():
+          def tpu_scaffold():
+            tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+            return tf.train.Scaffold()
+
+          scaffold_fn = tpu_scaffold
+        else:
           tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-          return tf.train.Scaffold()
 
-        scaffold_fn = tpu_scaffold
-      else:
-        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-
-    tf.logging.info("**** Trainable Variables ****")
-    for var in tvars:
-      init_string = ""
-      if var.name in initialized_variable_names:
-        init_string = ", *INIT_FROM_CKPT*"
-      tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-                      init_string)
+      tf.logging.info("**** Trainable Variables ****")
+      for var in tvars:
+        init_string = ""
+        if var.name in initialized_variable_names:
+          init_string = ", *INIT_FROM_CKPT*"
+        tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+                        init_string)
 
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -732,6 +735,100 @@ def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
     return d
 
   return input_fn
+
+
+def make_train_input_fn(tokenizer):
+  """
+  Returns:
+    input_fn:
+    num_train_steps:
+    num_warmup_steps:
+  """
+  train_examples = read_squad_examples(
+      input_file=FLAGS.train_file, is_training=True)
+  num_train_steps = int(
+      len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
+  num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
+
+  # Pre-shuffle the input to avoid having to make a very large shuffle
+  # buffer in in the `input_fn`.
+  rng = random.Random(12345)
+  rng.shuffle(train_examples)
+
+  # We write to a temporary file to avoid storing very large constant tensors
+  # in memory.
+  train_writer = FeatureWriter(
+      filename=os.path.join(FLAGS.output_dir, "train.tf_record"),
+      is_training=True)
+  convert_examples_to_features(
+      examples=train_examples,
+      tokenizer=tokenizer,
+      max_seq_length=FLAGS.max_seq_length,
+      doc_stride=FLAGS.doc_stride,
+      max_query_length=FLAGS.max_query_length,
+      is_training=True,
+      output_fn=train_writer.process_feature)
+  train_writer.close()
+
+  tf.logging.info("***** Running training *****")
+  tf.logging.info("  Num orig examples = %d", len(train_examples))
+  tf.logging.info("  Num split examples = %d", train_writer.num_features)
+  tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
+  tf.logging.info("  Num steps = %d", num_train_steps)
+  del train_examples
+
+  train_input_fn = input_fn_builder(
+      input_file=train_writer.filename,
+      seq_length=FLAGS.max_seq_length,
+      is_training=True,
+      drop_remainder=True)
+
+  return train_input_fn, num_train_steps, num_warmup_steps
+
+
+def make_eval_input_fn(tokenizer):
+  """
+  Returns:
+    eval_input_fn:
+    num_eval_steps:
+  """
+  eval_examples = read_squad_examples(
+      input_file=FLAGS.predict_file, is_training=False)
+
+  eval_writer = FeatureWriter(
+      filename=os.path.join(FLAGS.output_dir, "eval.tf_record"),
+      is_training=False)
+  eval_features = []
+
+  def append_feature(feature):
+    eval_features.append(feature)
+    eval_writer.process_feature(feature)
+
+  convert_examples_to_features(
+      examples=eval_examples,
+      tokenizer=tokenizer,
+      max_seq_length=FLAGS.max_seq_length,
+      doc_stride=FLAGS.doc_stride,
+      max_query_length=FLAGS.max_query_length,
+      is_training=False,
+      output_fn=append_feature)
+  eval_writer.close()
+
+  tf.logging.info("***** Running predictions *****")
+  tf.logging.info("  Num orig examples = %d", len(eval_examples))
+  tf.logging.info("  Num split examples = %d", len(eval_features))
+  tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
+
+  all_results = []
+
+  eval_input_fn = input_fn_builder(
+      input_file=eval_writer.filename,
+      seq_length=FLAGS.max_seq_length,
+      is_training=False,
+      drop_remainder=False)
+
+  return eval_input_fn
+
 
 
 RawResult = collections.namedtuple("RawResult",
@@ -1151,20 +1248,9 @@ def main(_):
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
-  train_examples = None
-  num_train_steps = None
-  num_warmup_steps = None
-  if FLAGS.do_train:
-    train_examples = read_squad_examples(
-        input_file=FLAGS.train_file, is_training=True)
-    num_train_steps = int(
-        len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
-    num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
-
-    # Pre-shuffle the input to avoid having to make a very large shuffle
-    # buffer in in the `input_fn`.
-    rng = random.Random(12345)
-    rng.shuffle(train_examples)
+  train_input_fn, num_train_steps, num_warmup_steps = \
+      make_train_input_fn(tokenizer)
+  eval_input_fn = make_eval_input_fn(tokenizer)
 
   model_fn = model_fn_builder(
       bert_config=bert_config,
@@ -1182,74 +1268,20 @@ def main(_):
       model_fn=model_fn,
       config=run_config,
       train_batch_size=FLAGS.train_batch_size,
+      eval_batch_size=FLAGS.predict_batch_size,
       predict_batch_size=FLAGS.predict_batch_size)
 
   if FLAGS.do_train:
-    # We write to a temporary file to avoid storing very large constant tensors
-    # in memory.
-    train_writer = FeatureWriter(
-        filename=os.path.join(FLAGS.output_dir, "train.tf_record"),
-        is_training=True)
-    convert_examples_to_features(
-        examples=train_examples,
-        tokenizer=tokenizer,
-        max_seq_length=FLAGS.max_seq_length,
-        doc_stride=FLAGS.doc_stride,
-        max_query_length=FLAGS.max_query_length,
-        is_training=True,
-        output_fn=train_writer.process_feature)
-    train_writer.close()
-
-    tf.logging.info("***** Running training *****")
-    tf.logging.info("  Num orig examples = %d", len(train_examples))
-    tf.logging.info("  Num split examples = %d", train_writer.num_features)
-    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
-    tf.logging.info("  Num steps = %d", num_train_steps)
-    del train_examples
-
-    train_input_fn = input_fn_builder(
-        input_file=train_writer.filename,
-        seq_length=FLAGS.max_seq_length,
-        is_training=True,
-        drop_remainder=True)
-    estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+    if not FLAGS.do_eval:
+      estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+    else:
+      train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn,
+                                          max_steps=num_train_steps)
+      eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn,
+          start_delay_secs=0, throttle_secs=0)
+      tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
   if FLAGS.do_predict:
-    eval_examples = read_squad_examples(
-        input_file=FLAGS.predict_file, is_training=False)
-
-    eval_writer = FeatureWriter(
-        filename=os.path.join(FLAGS.output_dir, "eval.tf_record"),
-        is_training=False)
-    eval_features = []
-
-    def append_feature(feature):
-      eval_features.append(feature)
-      eval_writer.process_feature(feature)
-
-    convert_examples_to_features(
-        examples=eval_examples,
-        tokenizer=tokenizer,
-        max_seq_length=FLAGS.max_seq_length,
-        doc_stride=FLAGS.doc_stride,
-        max_query_length=FLAGS.max_query_length,
-        is_training=False,
-        output_fn=append_feature)
-    eval_writer.close()
-
-    tf.logging.info("***** Running predictions *****")
-    tf.logging.info("  Num orig examples = %d", len(eval_examples))
-    tf.logging.info("  Num split examples = %d", len(eval_features))
-    tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
-
-    all_results = []
-
-    predict_input_fn = input_fn_builder(
-        input_file=eval_writer.filename,
-        seq_length=FLAGS.max_seq_length,
-        is_training=False,
-        drop_remainder=False)
-
     # If running eval on the TPU, you will need to specify the number of
     # steps.
     all_results = []
