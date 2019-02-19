@@ -620,11 +620,11 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         segment_ids=segment_ids,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
+    scaffold_fn = None
     if mode == tf.estimator.ModeKeys.TRAIN:
       tvars = tf.trainable_variables()
 
       initialized_variable_names = {}
-      scaffold_fn = None
       if init_checkpoint:
         (assignment_map, initialized_variable_names
         ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
@@ -674,14 +674,15 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           loss=total_loss,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
-    elif mode == tf.estimator.ModeKeys.PREDICT:
+    elif mode in [tf.estimator.ModeKeys.PREDICT, tf.estimator.ModeKeys.EVAL]:
       predictions = {
           "unique_ids": unique_ids,
           "start_logits": start_logits,
           "end_logits": end_logits,
       }
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-          mode=mode, predictions=predictions, scaffold_fn=scaffold_fn)
+          mode=mode, loss=tf.constant(0.0),
+          predictions=predictions, scaffold_fn=scaffold_fn)
     else:
       raise ValueError(
           "Only TRAIN and PREDICT modes are supported: %s" % (mode))
