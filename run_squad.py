@@ -1257,9 +1257,12 @@ def main(_):
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
-  train_input_fn, num_train_steps, num_warmup_steps = \
-      make_train_input_fn(tokenizer)
-  eval_input_fn = make_eval_input_fn(tokenizer)
+  num_train_steps, num_warmup_steps = None, None
+  if FLAGS.do_train:
+    train_input_fn, num_train_steps, num_warmup_steps = \
+        make_train_input_fn(tokenizer)
+  if FLAGS.do_train or FLAGS.do_predict:
+    eval_input_fn = make_eval_input_fn(tokenizer)
 
   model_fn = model_fn_builder(
       bert_config=bert_config,
@@ -1295,7 +1298,7 @@ def main(_):
     # steps.
     all_results = []
     for result in estimator.predict(
-        predict_input_fn, yield_single_examples=True):
+        eval_input_fn, yield_single_examples=True):
       if len(all_results) % 1000 == 0:
         tf.logging.info("Processing example: %d" % (len(all_results)))
       unique_id = int(result["unique_ids"])
