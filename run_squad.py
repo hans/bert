@@ -835,7 +835,7 @@ def make_eval_input_fn(tokenizer):
       is_training=False,
       drop_remainder=False)
 
-  return eval_input_fn
+  return eval_examples, eval_features, eval_input_fn
 
 
 
@@ -1262,7 +1262,8 @@ def main(_):
     train_input_fn, num_train_steps, num_warmup_steps = \
         make_train_input_fn(tokenizer)
   if FLAGS.do_train or FLAGS.do_predict:
-    eval_input_fn = make_eval_input_fn(tokenizer)
+    eval_examples, eval_features, eval_input_fn = \
+        make_eval_input_fn(tokenizer)
 
   model_fn = model_fn_builder(
       bert_config=bert_config,
