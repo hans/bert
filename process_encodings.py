@@ -11,6 +11,9 @@ p = ArgumentParser()
 p.add_argument("-i", "--encodings_file", default="encodings.jsonl")
 p.add_argument("-o", "--out_file", default="encodings.npy")
 p.add_argument("-l", "--layer", type=int, default=-1)
+p.add_argument("-c", "--extract_cls", default=False, action="store_true",
+               help=("If True, then extract only the CLS token representation. "
+                     "Otherwise average sentence token representations."))
 
 args = p.parse_args()
 
@@ -21,11 +24,17 @@ with open(args.encodings_file, "r") as encs_f:
 encodings_out = {}
 for encoding in encodings:
   t_encodings = []
-  for tidx, features in enumerate(encoding["features"]):
-    layer = next(l for l in features["layers"] if l["index"] == args.layer)
-    t_encodings.append(layer["values"])
+  if args.extract_cls:
+    t1_enc = encoding["features"][0]
+    assert t1_enc["token"] == "[CLS]"
+    layer = next(l for l in t1_enc["layers"] if l["index"] == args.layer)
+    encodings_out[encoding["linex_index"]] = layer["values"]
+  else:
+    for tidx, features in enumerate(encoding["features"]):
+      layer = next(l for l in features["layers"] if l["index"] == args.layer)
+      t_encodings.append(layer["values"])
 
-  encodings_out[encoding["linex_index"]] = np.mean(t_encodings, axis=0)
+    encodings_out[encoding["linex_index"]] = np.mean(t_encodings, axis=0)
 
 
 assert set(encodings_out.keys()) == set(range(len(encodings_out)))
