@@ -19,6 +19,8 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import re
+
 import modeling
 import optimization
 import tensorflow as tf
@@ -105,10 +107,20 @@ flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
+tf.flags.DEFINE_string(
+    "train_variables", None,
+    "[Optional] Only train variables which match the given regular expression.")
+
+tf.flags.DEFINE_string(
+    "ignore_checkpoint_variables", None,
+    "[Optional] Only load checkpoint variables which don't match the given "
+    "regular expression.")
+
 
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings):
+                     use_one_hot_embeddings,
+                     ignore_checkpoint_re=None, train_variables_re=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -147,13 +159,19 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
     total_loss = masked_lm_loss + next_sentence_loss
 
-    tvars = tf.trainable_variables()
-
+    tvars = [tvar for tvar in tf.trainable_variables()
+             if (train_variables_re is None or
+                 re.match(train_variables_re, tvar.name))]
     initialized_variable_names = {}
+
     scaffold_fn = None
     if init_checkpoint:
+      init_vars = [var for var in tvars
+                   if (ignore_checkpoint_re is None or
+                       not re.match(ignore_checkpoint_re, var.name))]
+      print("========== SKIPPING ", [x.name for x in set(tvars) - set(init_vars)])
       (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+      ) = modeling.get_assignment_map_from_checkpoint(init_vars, init_checkpoint)
       if use_tpu:
 
         def tpu_scaffold():
@@ -444,7 +462,9 @@ def main(_):
       num_train_steps=FLAGS.num_train_steps,
       num_warmup_steps=FLAGS.num_warmup_steps,
       use_tpu=FLAGS.use_tpu,
-      use_one_hot_embeddings=FLAGS.use_tpu)
+      use_one_hot_embeddings=FLAGS.use_tpu,
+      train_variables_re=FLAGS.train_variables,
+      ignore_checkpoint_re=FLAGS.ignore_checkpoint_variables)
 
   # If TPU is not available, this will fall back to normal Estimator on CPU
   # or GPU.
