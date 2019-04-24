@@ -36,8 +36,12 @@ flags.DEFINE_string(
     "This specifies the model architecture.")
 
 flags.DEFINE_string(
-    "input_file", None,
-    "Input TF example files (can be a glob or comma separated).")
+    "train_file", None,
+    "Input TF example files for training (can be a glob or comma separated).")
+
+flags.DEFINE_string(
+    "eval_file", None,
+    "Input TF example files for evaluation (can be a glob or comma separated).")
 
 flags.DEFINE_string(
     "output_dir", None,
@@ -431,13 +435,19 @@ def main(_):
 
   tf.gfile.MakeDirs(FLAGS.output_dir)
 
-  input_files = []
-  for input_pattern in FLAGS.input_file.split(","):
-    input_files.extend(tf.gfile.Glob(input_pattern))
+  train_files = []
+  for input_pattern in FLAGS.train_file.split(","):
+    train_files.extend(tf.gfile.Glob(input_pattern))
+  eval_files = []
+  for input_pattern in FLAGS.eval_file.split(","):
+    eval_files.extend(tf.gfile.Glob(input_pattern))
 
-  tf.logging.info("*** Input Files ***")
-  for input_file in input_files:
-    tf.logging.info("  %s" % input_file)
+  tf.logging.info("*** Training Files ***")
+  for train_file in train_files:
+    tf.logging.info("  %s" % train_file)
+  tf.logging.info("*** Eval Files ***")
+  for eval_file in eval_files:
+    tf.logging.info("  %s" % eval_file)
 
   tpu_cluster_resolver = None
   if FLAGS.use_tpu and FLAGS.tpu_name:
@@ -475,25 +485,40 @@ def main(_):
       train_batch_size=FLAGS.train_batch_size,
       eval_batch_size=FLAGS.eval_batch_size)
 
+  # Prepare input functions.
+  train_input_fn, eval_input_fn = None, None
   if FLAGS.do_train:
-    tf.logging.info("***** Running training *****")
-    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
     train_input_fn = input_fn_builder(
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True)
-    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
-
   if FLAGS.do_eval:
-    tf.logging.info("***** Running evaluation *****")
-    tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
-
     eval_input_fn = input_fn_builder(
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=False)
+
+  if FLAGS.do_train:
+    tf.logging.info("***** Running training *****")
+    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
+    if not FLAGS.do_eval:
+      # Run training without online evaluation.
+      estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
+    else:
+      # Run joint train-and-eval.
+      tf.logging.info("  Running evaluation online with training.")
+
+      train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
+      eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn,
+          start_delay_secs=0, throttle_secs=0)
+      tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+
+  # Run full evaluation.
+  if FLAGS.do_eval:
+    tf.logging.info("***** Running evaluation *****")
+    tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
 
     result = estimator.evaluate(
         input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)
