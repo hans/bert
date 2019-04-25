@@ -10,7 +10,7 @@ MODELDIR="${BASEDIR}/${MODEL}"
 CKPT_NAME="model"
 CKPT_SUFFIX="$3" # can be used to load checkpoint at a particular global step
 JSONL="encodings.${MODEL}${CKPT_SUFFIX}.jsonl"
-NPY="encodings.${MODEL}${CKPT_SUFFIX}.npy"
+NPY="encodings-CLS.${MODEL}${CKPT_SUFFIX}.npy"
 LAYER="-1"
 
 # Save BERT features to jsonl file
@@ -20,4 +20,4 @@ python extract_features.py --input_file="${INPUT}" --output_file="${JSONL}" \
     --layers="-1" --max_seq_length=64 --batch_size=64 || exit 1
 
 # Convert jsonl to common npy encoding
-python process_encodings.py -i "${JSONL}" -l $LAYER -o "${NPY}"
+python process_encodings.py -c -i "${JSONL}" -l $LAYER -o "${NPY}"
