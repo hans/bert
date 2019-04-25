@@ -19,7 +19,11 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import mmap
 import random
+
+from tqdm import tqdm, trange
+
 import tensorflow as tf
 import tokenization
 
@@ -63,6 +67,15 @@ flags.DEFINE_float(
 flags.DEFINE_bool(
     "shuffle_seqs", False,
     "If True, randomly shuffle word sequences.")
+
+
+def get_num_lines(file_path):
+    fp = open(file_path, "r+")
+    buf = mmap.mmap(fp.fileno(), 0)
+    lines = 0
+    while buf.readline():
+        lines += 1
+    return lines
 
 
 class TrainingInstance(object):
@@ -189,9 +202,11 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   # (2) Blank lines between documents. Document boundaries are needed so
   # that the "next sentence prediction" task doesn't span between documents.
   for input_file in input_files:
+    num_lines = get_num_lines(input_file)
+
     with tf.gfile.GFile(input_file, "r") as reader:
-      while True:
-        line = tokenization.convert_to_unicode(reader.readline())
+      for line in tqdm(reader, total=num_lines, desc="Reading lines"):
+        line = tokenization.convert_to_unicode(line)
         if not line:
           break
         line = line.strip()
@@ -210,7 +225,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   vocab_words = list(tokenizer.vocab.keys())
   instances = []
   for _ in range(dupe_factor):
-    for document_index in range(len(all_documents)):
+    for document_index in trange(len(all_documents), desc="Reading documents"):
       instances.extend(
           create_instances_from_document(
               all_documents, document_index, max_seq_length, short_seq_prob,
@@ -251,92 +266,95 @@ def create_instances_from_document(
   current_chunk = []
   current_length = 0
   i = 0
-  while i < len(document):
-    segment = document[i]
-    current_chunk.append(segment)
-    current_length += len(segment)
-    if i == len(document) - 1 or current_length >= target_seq_length:
-      if current_chunk:
-        # `a_end` is how many segments from `current_chunk` go into the `A`
-        # (first) sentence.
-        a_end = 1
-        if len(current_chunk) >= 2:
-          a_end = rng.randint(1, len(current_chunk) - 1)
+  with tqdm(total=len(document), desc="Creating examples") as pbar:
+    pbar.update(i - pbar.n)
 
-        tokens_a = []
-        for j in range(a_end):
-          tokens_a.extend(current_chunk[j])
+    while i < len(document):
+      segment = document[i]
+      current_chunk.append(segment)
+      current_length += len(segment)
+      if i == len(document) - 1 or current_length >= target_seq_length:
+        if current_chunk:
+          # `a_end` is how many segments from `current_chunk` go into the `A`
+          # (first) sentence.
+          a_end = 1
+          if len(current_chunk) >= 2:
+            a_end = rng.randint(1, len(current_chunk) - 1)
 
-        tokens_b = []
-        # Random next
-        is_random_next = False
-        if len(current_chunk) == 1 or rng.random() < 0.5:
-          is_random_next = True
-          target_b_length = target_seq_length - len(tokens_a)
+          tokens_a = []
+          for j in range(a_end):
+            tokens_a.extend(current_chunk[j])
 
-          # This should rarely go for more than one iteration for large
-          # corpora. However, just to be careful, we try to make sure that
-          # the random document is not the same as the document
-          # we're processing.
-          for _ in range(10):
-            random_document_index = rng.randint(0, len(all_documents) - 1)
-            if random_document_index != document_index:
-              break
-
-          random_document = all_documents[random_document_index]
-          random_start = rng.randint(0, len(random_document) - 1)
-          for j in range(random_start, len(random_document)):
-            tokens_b.extend(random_document[j])
-            if len(tokens_b) >= target_b_length:
-              break
-          # We didn't actually use these segments so we "put them back" so
-          # they don't go to waste.
-          num_unused_segments = len(current_chunk) - a_end
-          i -= num_unused_segments
-        # Actual next
-        else:
+          tokens_b = []
+          # Random next
           is_random_next = False
-          for j in range(a_end, len(current_chunk)):
-            tokens_b.extend(current_chunk[j])
-        truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng)
+          if len(current_chunk) == 1 or rng.random() < 0.5:
+            is_random_next = True
+            target_b_length = target_seq_length - len(tokens_a)
 
-        assert len(tokens_a) >= 1
-        assert len(tokens_b) >= 1
+            # This should rarely go for more than one iteration for large
+            # corpora. However, just to be careful, we try to make sure that
+            # the random document is not the same as the document
+            # we're processing.
+            for _ in range(10):
+              random_document_index = rng.randint(0, len(all_documents) - 1)
+              if random_document_index != document_index:
+                break
 
-        if shuffle_seqs:
-          rng.shuffle(tokens_a)
-          rng.shuffle(tokens_b)
+            random_document = all_documents[random_document_index]
+            random_start = rng.randint(0, len(random_document) - 1)
+            for j in range(random_start, len(random_document)):
+              tokens_b.extend(random_document[j])
+              if len(tokens_b) >= target_b_length:
+                break
+            # We didn't actually use these segments so we "put them back" so
+            # they don't go to waste.
+            num_unused_segments = len(current_chunk) - a_end
+            i -= num_unused_segments
+          # Actual next
+          else:
+            is_random_next = False
+            for j in range(a_end, len(current_chunk)):
+              tokens_b.extend(current_chunk[j])
+          truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng)
 
-        tokens = []
-        segment_ids = []
-        tokens.append("[CLS]")
-        segment_ids.append(0)
-        for token in tokens_a:
-          tokens.append(token)
+          assert len(tokens_a) >= 1
+          assert len(tokens_b) >= 1
+
+          if shuffle_seqs:
+            rng.shuffle(tokens_a)
+            rng.shuffle(tokens_b)
+
+          tokens = []
+          segment_ids = []
+          tokens.append("[CLS]")
+          segment_ids.append(0)
+          for token in tokens_a:
+            tokens.append(token)
+            segment_ids.append(0)
+
+          tokens.append("[SEP]")
           segment_ids.append(0)
 
-        tokens.append("[SEP]")
-        segment_ids.append(0)
-
-        for token in tokens_b:
-          tokens.append(token)
+          for token in tokens_b:
+            tokens.append(token)
+            segment_ids.append(1)
+          tokens.append("[SEP]")
           segment_ids.append(1)
-        tokens.append("[SEP]")
-        segment_ids.append(1)
 
-        (tokens, masked_lm_positions,
-         masked_lm_labels) = create_masked_lm_predictions(
-             tokens, masked_lm_prob, max_predictions_per_seq, vocab_words, rng)
-        instance = TrainingInstance(
-            tokens=tokens,
-            segment_ids=segment_ids,
-            is_random_next=is_random_next,
-            masked_lm_positions=masked_lm_positions,
-            masked_lm_labels=masked_lm_labels)
-        instances.append(instance)
-      current_chunk = []
-      current_length = 0
-    i += 1
+          (tokens, masked_lm_positions,
+          masked_lm_labels) = create_masked_lm_predictions(
+              tokens, masked_lm_prob, max_predictions_per_seq, vocab_words, rng)
+          instance = TrainingInstance(
+              tokens=tokens,
+              segment_ids=segment_ids,
+              is_random_next=is_random_next,
+              masked_lm_positions=masked_lm_positions,
+              masked_lm_labels=masked_lm_labels)
+          instances.append(instance)
+        current_chunk = []
+        current_length = 0
+      i += 1
 
   return instances
 
@@ -417,6 +435,7 @@ def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
 
 
 def main(_):
+  print("Shuffle seqs:", FLAGS.shuffle_seqs)
   tf.logging.set_verbosity(tf.logging.INFO)
 
   tokenizer = tokenization.FullTokenizer(
