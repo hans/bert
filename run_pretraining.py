@@ -36,11 +36,11 @@ flags.DEFINE_string(
     "This specifies the model architecture.")
 
 flags.DEFINE_string(
-    "train_file", None,
+    "train_file", "",
     "Input TF example files for training (can be a glob or comma separated).")
 
 flags.DEFINE_string(
-    "eval_file", None,
+    "eval_file", "",
     "Input TF example files for evaluation (can be a glob or comma separated).")
 
 flags.DEFINE_string(
@@ -490,14 +490,20 @@ def main(_):
   # Prepare input functions.
   train_input_fn, eval_input_fn = None, None
   if FLAGS.do_train:
+    if not train_files:
+      raise ValueError("Instructed to train, but no training files given (use --train_file).")
+
     train_input_fn = input_fn_builder(
-        input_files=input_files,
+        input_files=train_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True)
   if FLAGS.do_eval:
+    if not eval_files:
+      raise ValueError("Instructed to eval, but no training files given (use --eval_file).")
+
     eval_input_fn = input_fn_builder(
-        input_files=input_files,
+        input_files=eval_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=False)
@@ -534,7 +540,6 @@ def main(_):
 
 
 if __name__ == "__main__":
-  flags.mark_flag_as_required("input_file")
   flags.mark_flag_as_required("bert_config_file")
   flags.mark_flag_as_required("output_dir")
   tf.app.run()
