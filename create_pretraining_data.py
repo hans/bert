@@ -64,6 +64,13 @@ flags.DEFINE_float(
     "Probability of creating sequences which are shorter than the "
     "maximum length.")
 
+flags.DEFINE_string("masking_policy", "default",
+    ("Policy for generating masked LM examples. One of `default`, `maskonly`, "
+      "`randomonly`. `default` cues the mixed strategy described in the BERT "
+      "paper. `maskonly` specifies that the masked word should always be "
+      "replaced with a MASK token. `randomonly` specifies that the masked word "
+      "should be replaced with a random vocabulary token."))
+
 flags.DEFINE_bool(
     "shuffle_seqs", False,
     "If True, randomly shuffle word sequences.")
@@ -191,7 +198,8 @@ def create_float_feature(values):
 
 def create_training_instances(input_files, tokenizer, max_seq_length,
                               dupe_factor, short_seq_prob, masked_lm_prob,
-                              max_predictions_per_seq, shuffle_seqs, rng):
+                              max_predictions_per_seq, shuffle_seqs,
+                              masking_policy, rng):
   """Create `TrainingInstance`s from raw text."""
   all_documents = [[]]
 
@@ -229,8 +237,8 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
       instances.extend(
           create_instances_from_document(
               all_documents, document_index, max_seq_length, short_seq_prob,
-              masked_lm_prob, max_predictions_per_seq, vocab_words, shuffle_seqs,
-              rng))
+              masked_lm_prob, max_predictions_per_seq, vocab_words,
+              shuffle_seqs, masking_policy, rng))
 
   rng.shuffle(instances)
   return instances
@@ -239,7 +247,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
 def create_instances_from_document(
     all_documents, document_index, max_seq_length, short_seq_prob,
     masked_lm_prob, max_predictions_per_seq, vocab_words, shuffle_seqs,
-    rng):
+    masking_policy, rng):
   """Creates `TrainingInstance`s for a single document."""
   document = all_documents[document_index]
 
@@ -344,7 +352,8 @@ def create_instances_from_document(
 
           (tokens, masked_lm_positions,
           masked_lm_labels) = create_masked_lm_predictions(
-              tokens, masked_lm_prob, max_predictions_per_seq, vocab_words, rng)
+              tokens, masked_lm_prob, max_predictions_per_seq, vocab_words,
+              masking_policy, rng)
           instance = TrainingInstance(
               tokens=tokens,
               segment_ids=segment_ids,
@@ -364,7 +373,8 @@ MaskedLmInstance = collections.namedtuple("MaskedLmInstance",
 
 
 def create_masked_lm_predictions(tokens, masked_lm_prob,
-                                 max_predictions_per_seq, vocab_words, rng):
+                                 max_predictions_per_seq, vocab_words,
+                                 masking_policy, rng):
   """Creates the predictions for the masked LM objective."""
 
   cand_indexes = []
@@ -390,16 +400,21 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
     covered_indexes.add(index)
 
     masked_token = None
-    # 80% of the time, replace with [MASK]
-    if rng.random() < 0.8:
-      masked_token = "[MASK]"
-    else:
-      # 10% of the time, keep original
-      if rng.random() < 0.5:
-        masked_token = tokens[index]
-      # 10% of the time, replace with random word
+    if masking_policy == "default":
+      # 80% of the time, replace with [MASK]
+      if rng.random() < 0.8:
+        masked_token = "[MASK]"
       else:
-        masked_token = vocab_words[rng.randint(0, len(vocab_words) - 1)]
+        # 10% of the time, keep original
+        if rng.random() < 0.5:
+          masked_token = tokens[index]
+        # 10% of the time, replace with random word
+        else:
+          masked_token = vocab_words[rng.randint(0, len(vocab_words) - 1)]
+    elif masking_policy == "randomonly":
+      masked_token = vocab_words[rng.randint(0, len(vocab_words) - 1)]
+    elif masking_policy == "maskonly":
+      masked_token = "[MASK]"
 
     output_tokens[index] = masked_token
 
@@ -436,6 +451,11 @@ def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
 
 def main(_):
   print("Shuffle seqs:", FLAGS.shuffle_seqs)
+
+  if FLAGS.masking_policy not in ["default", "maskonly", "randomonly"]:
+    print("Invalid masking policy:", FLAGS.masking_policy)
+    return 1
+
   tf.logging.set_verbosity(tf.logging.INFO)
 
   tokenizer = tokenization.FullTokenizer(
@@ -453,7 +473,7 @@ def main(_):
   instances = create_training_instances(
       input_files, tokenizer, FLAGS.max_seq_length, FLAGS.dupe_factor,
       FLAGS.short_seq_prob, FLAGS.masked_lm_prob, FLAGS.max_predictions_per_seq,
-      FLAGS.shuffle_seqs, rng)
+      FLAGS.shuffle_seqs, FLAGS.masking_policy, rng)
 
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
