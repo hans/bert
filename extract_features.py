@@ -23,6 +23,8 @@ import collections
 import json
 import re
 
+import numpy as np
+
 import modeling
 import tokenization
 import tensorflow as tf
@@ -76,6 +78,9 @@ flags.DEFINE_bool(
     "If True, tf.one_hot will be used for embedding lookups, otherwise "
     "tf.nn.embedding_lookup will be used. On TPUs, this should be True "
     "since it is much faster.")
+
+flags.DEFINE_string(
+    "output_format", "jsonl", "jsonl or hdf5")
 
 
 class InputExample(object):
@@ -384,11 +389,20 @@ def main(_):
   input_fn = input_fn_builder(
       features=features, seq_length=FLAGS.max_seq_length)
 
-  with codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file,
-                                               "w")) as writer:
-    for result in estimator.predict(input_fn, yield_single_examples=True):
-      unique_id = int(result["unique_id"])
-      feature = unique_id_to_feature[unique_id]
+  if FLAGS.output_format == "jsonl":
+    f = codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file, "w"))
+  elif FLAGS.output_format == "hdf5":
+    import h5py
+    f = h5py.File(FLAGS.output_file, "w")
+    sentence_to_idx = f.create_group("sentence_to_index")
+  else:
+    raise ValueError("invalid output format %s" % FLAGS.output_format)
+
+  for result in estimator.predict(input_fn, yield_single_examples=True):
+    unique_id = int(result["unique_id"])
+    feature = unique_id_to_feature[unique_id]
+
+    if FLAGS.output_format == "jsonl":
       output_json = collections.OrderedDict()
       output_json["linex_index"] = unique_id
       all_features = []
@@ -407,7 +421,25 @@ def main(_):
         features["layers"] = all_layers
         all_features.append(features)
       output_json["features"] = all_features
-      writer.write(json.dumps(output_json) + "\n")
+      f.write(json.dumps(output_json) + "\n")
+    elif FLAGS.output_format == "hdf5":
+      key = str(unique_id)
+      sentence_to_idx[" ".join(feature.tokens)] = key
+
+      # Collect layer values into a single ndarray.
+      f[key] = np.zeros((bert_config.num_hidden_layers,
+                          len(feature.tokens),
+                          bert_config.hidden_size))
+
+      for j, layer_index in enumerate(layer_indexes):
+        layer_output = result["layer_output_%d" % j]
+        print(layer_output.shape, FLAGS.max_seq_length, bert_config.hidden_size)
+        assert layer_output.shape == (FLAGS.max_seq_length, bert_config.hidden_size)
+
+        f[key][j] = np.array(layer_output[:len(feature.tokens), :])
+
+  f.close()
+
 
 
 if __name__ == "__main__":
