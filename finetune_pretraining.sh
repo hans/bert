@@ -9,7 +9,9 @@ LM_DEV_DATA=/om/data/public/jgauthie/books_full.dev.tfrecord
 MAX_TRAIN_STEPS=250
 OUTPUTDIR="${BASEDIR}/finetune-${MAX_TRAIN_STEPS}.${MODEL}.LM-run${RUN}"
 
-python run_pretraining.sh --do_train=true --do_eval=true \
+python run_pretraining.py --do_train=true --do_eval=true \
+    --train_file $LM_TRAIN_DATA \
+    --eval_file $LM_DEV_DATA \
     --vocab_file "${MODELDIR}/vocab.txt" \
     --bert_config_file "${MODELDIR}/bert_config.json" \
     --init_checkpoint "${MODELDIR}/bert_model.ckpt" \
