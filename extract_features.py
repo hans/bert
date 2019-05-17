@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import codecs
 import collections
+from copy import copy
 import json
 import re
 
@@ -94,9 +95,10 @@ class InputExample(object):
 class InputFeatures(object):
   """A single set of features of data."""
 
-  def __init__(self, unique_id, tokens, input_ids, input_mask, input_type_ids):
+  def __init__(self, unique_id, tokens, orig_tokens, input_ids, input_mask, input_type_ids):
     self.unique_id = unique_id
     self.tokens = tokens
+    self.orig_tokens = orig_tokens
     self.input_ids = input_ids
     self.input_mask = input_mask
     self.input_type_ids = input_type_ids
@@ -223,6 +225,13 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
     if example.text_b:
       tokens_b = tokenizer.tokenize(example.text_b)
 
+    # Store tokens before slicing at seq_length
+    orig_tokens_a = copy(tokens_a)
+    orig_tokens_b = copy(tokens_b)
+    orig_tokens = ["[CLS]"] + tokens_a + ["[SEP]"]
+    if orig_tokens_b:
+      orig_tokens += tokens_b + ["[SEP]"]
+
     if tokens_b:
       # Modifies `tokens_a` and `tokens_b` in place so that the total
       # length is less than the specified length.
@@ -298,6 +307,7 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
         InputFeatures(
             unique_id=example.unique_id,
             tokens=tokens,
+            orig_tokens=orig_tokens,
             input_ids=input_ids,
             input_mask=input_mask,
             input_type_ids=input_type_ids))
@@ -366,10 +376,11 @@ def main(_):
 
   features = convert_examples_to_features(
       examples=examples, seq_length=FLAGS.max_seq_length, tokenizer=tokenizer)
+  assert len(features) == len(examples)
 
-  unique_id_to_feature = {}
-  for feature in features:
-    unique_id_to_feature[feature.unique_id] = feature
+  unique_id_to_idx = {}
+  for idx, feature in enumerate(features):
+    unique_id_to_idx[feature.unique_id] = idx
 
   model_fn = model_fn_builder(
       bert_config=bert_config,
@@ -395,17 +406,19 @@ def main(_):
     import h5py
     f = h5py.File(FLAGS.output_file, "w")
     sentence_to_idx = f.create_group("sentence_to_index")
+    tokenized_sentences = f.create_group("tokenized_sentences")
   else:
     raise ValueError("invalid output format %s" % FLAGS.output_format)
 
   for result in estimator.predict(input_fn, yield_single_examples=True):
     unique_id = int(result["unique_id"])
-    feature = unique_id_to_feature[unique_id]
+    idx = unique_id_to_idx[unique_id]
+    example, feature = examples[idx], features[idx]
 
     if FLAGS.output_format == "jsonl":
       output_json = collections.OrderedDict()
       output_json["linex_index"] = unique_id
-      all_features = []
+      out_features = []
       for (i, token) in enumerate(feature.tokens):
         all_layers = []
         for (j, layer_index) in enumerate(layer_indexes):
@@ -416,15 +429,16 @@ def main(_):
               round(float(x), 6) for x in layer_output[i:(i + 1)].flat
           ]
           all_layers.append(layers)
-        features = collections.OrderedDict()
-        features["token"] = token
-        features["layers"] = all_layers
-        all_features.append(features)
-      output_json["features"] = all_features
+        out_features_i = collections.OrderedDict()
+        out_features_i["token"] = token
+        out_features_i["layers"] = all_layers
+        out_features.append(out_features_i)
+      output_json["features"] = out_features
       f.write(json.dumps(output_json) + "\n")
     elif FLAGS.output_format == "hdf5":
       key = str(unique_id)
-      sentence_to_idx[" ".join(feature.tokens)] = key
+      sentence_to_idx[example.text_a] = key
+      tokenized_sentences[key] = " ".join(feature.tokens)
 
       # Collect layer values into a single ndarray.
       f[key] = np.zeros((bert_config.num_hidden_layers,
@@ -433,7 +447,6 @@ def main(_):
 
       for j, layer_index in enumerate(layer_indexes):
         layer_output = result["layer_output_%d" % j]
-        print(layer_output.shape, FLAGS.max_seq_length, bert_config.hidden_size)
         assert layer_output.shape == (FLAGS.max_seq_length, bert_config.hidden_size)
 
         f[key][j] = np.array(layer_output[:len(feature.tokens), :])
