@@ -233,6 +233,11 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   vocab_words = list(tokenizer.vocab.keys())
   instances = []
   for _ in range(dupe_factor):
+    if shuffle_seqs:
+      for document in all_documents:
+        for sent in document:
+          rng.shuffle(sent)
+
     for document_index in trange(len(all_documents), desc="Reading documents"):
       instances.extend(
           create_instances_from_document(
@@ -328,10 +333,6 @@ def create_instances_from_document(
 
           assert len(tokens_a) >= 1
           assert len(tokens_b) >= 1
-
-          if shuffle_seqs:
-            rng.shuffle(tokens_a)
-            rng.shuffle(tokens_b)
 
           tokens = []
           segment_ids = []
