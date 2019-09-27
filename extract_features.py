@@ -437,7 +437,7 @@ def main(_):
       f.write(json.dumps(output_json) + "\n")
     elif FLAGS.output_format == "hdf5":
       key = str(unique_id)
-      sentence_to_idx[example.text_a] = key
+      # sentence_to_idx[example.text_a] = key
       tokenized_sentences[key] = " ".join(feature.tokens)
 
       # Collect layer values into a single ndarray.
