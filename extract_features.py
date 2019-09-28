@@ -449,7 +449,7 @@ def main(_):
         layer_output = result["layer_output_%d" % j]
         assert layer_output.shape == (FLAGS.max_seq_length, bert_config.hidden_size)
 
-        f[key][j] = np.array(layer_output[:len(feature.tokens), :])
+        f[key][layer_index] = np.array(layer_output[:len(feature.tokens), :])
 
   f.close()
 
